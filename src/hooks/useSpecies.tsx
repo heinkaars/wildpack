@@ -7,11 +7,12 @@ interface UseSpeciesOptions {
   coordinates?: Coordinates | null;
   maxDistance?: number;
   searchQuery?: string;
+  categories?: string[];
 }
 
-export const useSpecies = ({ coordinates, maxDistance = 50, searchQuery = '' }: UseSpeciesOptions = {}) => {
+export const useSpecies = ({ coordinates, maxDistance = 50, searchQuery = '', categories = [] }: UseSpeciesOptions = {}) => {
   return useQuery({
-    queryKey: ['species', coordinates?.latitude, coordinates?.longitude, maxDistance, searchQuery],
+    queryKey: ['species', coordinates?.latitude, coordinates?.longitude, maxDistance, searchQuery, categories],
     queryFn: async () => {
       let allSpecies: Species[] = [];
 
@@ -61,6 +62,11 @@ export const useSpecies = ({ coordinates, maxDistance = 50, searchQuery = '' }: 
           s.name.toLowerCase().includes(query) ||
           s.scientificName.toLowerCase().includes(query)
         );
+      }
+
+      // Step 5: Apply category filter if provided
+      if (categories && categories.length > 0) {
+        allSpecies = allSpecies.filter(s => categories.includes(s.category));
       }
 
       return allSpecies;
