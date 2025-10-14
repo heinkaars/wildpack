@@ -8,12 +8,15 @@ import { useGeolocation } from '@/hooks/useGeolocation';
 import { filterSpeciesByLocation, getRegionFromCoordinates } from '@/utils/locationUtils';
 import LocationSelector from '@/components/LocationSelector';
 import { Skeleton } from '@/components/ui/skeleton';
+import { Slider } from '@/components/ui/slider';
+import { Label } from '@/components/ui/label';
 
 const Explore = () => {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [useLocation, setUseLocation] = useState(true);
   const [selectedRegion, setSelectedRegion] = useState('All Regions');
+  const [maxDistance, setMaxDistance] = useState(50);
   const { coordinates, loading: locationLoading, error: locationError } = useGeolocation();
 
   const detectedRegion = useMemo(() => {
@@ -34,7 +37,7 @@ const Explore = () => {
 
     // Filter by location if enabled
     if (useLocation && coordinates) {
-      filtered = filterSpeciesByLocation(filtered, coordinates);
+      filtered = filterSpeciesByLocation(filtered, coordinates, maxDistance);
     } else if (selectedRegion !== 'All Regions') {
       filtered = filtered.filter(s => s.region === selectedRegion);
     }
@@ -48,7 +51,7 @@ const Explore = () => {
     }
 
     return filtered;
-  }, [coordinates, useLocation, selectedRegion, searchQuery]);
+  }, [coordinates, useLocation, selectedRegion, searchQuery, maxDistance]);
 
   return (
     <div className="min-h-screen pb-24 bg-background">
@@ -77,6 +80,25 @@ const Explore = () => {
             useLocation={useLocation}
             onToggleLocation={() => setUseLocation(!useLocation)}
           />
+          
+          {useLocation && coordinates && (
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">
+                Distance: {maxDistance} km
+              </Label>
+              <Slider
+                value={[maxDistance]}
+                onValueChange={(value) => setMaxDistance(value[0])}
+                min={5}
+                max={1000}
+                step={10}
+                className="w-full"
+              />
+              <p className="text-xs text-muted-foreground">
+                Adjust the search radius for nearby species
+              </p>
+            </div>
+          )}
           
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-muted-foreground" />
