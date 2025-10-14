@@ -1,1 +1,4 @@
 project_id = "qzttzrqtxfweiqdivebp"
+
+[functions.fetch-species]
+verify_jwt = false

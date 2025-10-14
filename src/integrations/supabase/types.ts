@@ -50,6 +50,93 @@ export type Database = {
         }
         Relationships: []
       }
+      species: {
+        Row: {
+          active_time: string | null
+          cache_expires_at: string | null
+          category: string | null
+          conservation_status: string | null
+          created_at: string | null
+          description: string | null
+          diet: string | null
+          habitat: string | null
+          id: string
+          image_urls: string[] | null
+          inaturalist_id: number | null
+          lat_max: number | null
+          lat_min: number | null
+          lon_max: number | null
+          lon_min: number | null
+          name: string
+          observation_count: number | null
+          primary_image_url: string | null
+          region: string | null
+          scientific_name: string
+          size_cm: number | null
+          source: string | null
+          taxon_id: number | null
+          updated_at: string | null
+          weight_kg: number | null
+          wikipedia_url: string | null
+        }
+        Insert: {
+          active_time?: string | null
+          cache_expires_at?: string | null
+          category?: string | null
+          conservation_status?: string | null
+          created_at?: string | null
+          description?: string | null
+          diet?: string | null
+          habitat?: string | null
+          id: string
+          image_urls?: string[] | null
+          inaturalist_id?: number | null
+          lat_max?: number | null
+          lat_min?: number | null
+          lon_max?: number | null
+          lon_min?: number | null
+          name: string
+          observation_count?: number | null
+          primary_image_url?: string | null
+          region?: string | null
+          scientific_name: string
+          size_cm?: number | null
+          source?: string | null
+          taxon_id?: number | null
+          updated_at?: string | null
+          weight_kg?: number | null
+          wikipedia_url?: string | null
+        }
+        Update: {
+          active_time?: string | null
+          cache_expires_at?: string | null
+          category?: string | null
+          conservation_status?: string | null
+          created_at?: string | null
+          description?: string | null
+          diet?: string | null
+          habitat?: string | null
+          id?: string
+          image_urls?: string[] | null
+          inaturalist_id?: number | null
+          lat_max?: number | null
+          lat_min?: number | null
+          lon_max?: number | null
+          lon_min?: number | null
+          name?: string
+          observation_count?: number | null
+          primary_image_url?: string | null
+          region?: string | null
+          scientific_name?: string
+          size_cm?: number | null
+          source?: string | null
+          taxon_id?: number | null
+          updated_at?: string | null
+          weight_kg?: number | null
+          wikipedia_url?: string | null
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never

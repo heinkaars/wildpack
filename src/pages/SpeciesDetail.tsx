@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { getSpeciesById } from '@/data/species';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -10,6 +9,8 @@ import { ScrollArea } from '@/components/ui/scroll-area';
 import { ArrowLeft, Plus, Send } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { Skeleton } from '@/components/ui/skeleton';
+import { useSpeciesById } from '@/hooks/useSpecies';
 import {
   Dialog,
   DialogContent,
@@ -27,7 +28,7 @@ const SpeciesDetail = () => {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const species = id ? getSpeciesById(id) : undefined;
+  const { data: species, isLoading: speciesLoading } = useSpeciesById(id || '');
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputMessage, setInputMessage] = useState('');
   const [loading, setLoading] = useState(false);
@@ -50,6 +51,27 @@ const SpeciesDetail = () => {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages]);
+
+  if (speciesLoading) {
+    return (
+      <div className="min-h-screen pb-24 bg-background">
+        <div className="relative h-64 overflow-hidden">
+          <Skeleton className="w-full h-full" />
+        </div>
+        <div className="max-w-7xl mx-auto px-4 -mt-12 relative z-10">
+          <Card className="p-6 mb-6">
+            <Skeleton className="h-10 w-64 mb-4" />
+            <Skeleton className="h-6 w-48 mb-3" />
+            <div className="flex gap-2">
+              <Skeleton className="h-6 w-20" />
+              <Skeleton className="h-6 w-24" />
+              <Skeleton className="h-6 w-16" />
+            </div>
+          </Card>
+        </div>
+      </div>
+    );
+  }
 
   if (!species) {
     return (

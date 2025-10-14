@@ -1,15 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { speciesData } from '@/data/species';
 import SpeciesCard from '@/components/SpeciesCard';
 import { Input } from '@/components/ui/input';
 import { Search, MapPin } from 'lucide-react';
 import { useGeolocation } from '@/hooks/useGeolocation';
-import { filterSpeciesByLocation, getRegionFromCoordinates } from '@/utils/locationUtils';
+import { getRegionFromCoordinates } from '@/utils/locationUtils';
 import LocationSelector from '@/components/LocationSelector';
 import { Skeleton } from '@/components/ui/skeleton';
 import { Slider } from '@/components/ui/slider';
 import { Label } from '@/components/ui/label';
+import { useSpecies } from '@/hooks/useSpecies';
 
 const Explore = () => {
   const navigate = useNavigate();
@@ -32,26 +32,28 @@ const Explore = () => {
     }
   }, [detectedRegion, useLocation]);
 
-  const filteredSpecies = useMemo(() => {
-    let filtered = speciesData;
+  // Use hybrid species hook
+  const { 
+    data: allSpecies = [], 
+    isLoading: speciesLoading,
+  } = useSpecies({
+    coordinates: useLocation ? coordinates : null,
+    maxDistance,
+    searchQuery,
+  });
 
-    // Filter by location if enabled
-    if (useLocation && coordinates) {
-      filtered = filterSpeciesByLocation(filtered, coordinates, maxDistance);
-    } else if (selectedRegion !== 'All Regions') {
+  // Filter by manual region if not using location
+  const filteredSpecies = useMemo(() => {
+    let filtered = allSpecies;
+
+    if (!useLocation && selectedRegion !== 'All Regions') {
       filtered = filtered.filter(s => s.region === selectedRegion);
     }
 
-    // Filter by search query
-    if (searchQuery) {
-      filtered = filtered.filter(species =>
-        species.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        species.scientificName.toLowerCase().includes(searchQuery.toLowerCase())
-      );
-    }
-
     return filtered;
-  }, [coordinates, useLocation, selectedRegion, searchQuery, maxDistance]);
+  }, [allSpecies, useLocation, selectedRegion]);
+
+  const isLoading = locationLoading || speciesLoading;
 
   return (
     <div className="min-h-screen pb-24 bg-background">
@@ -112,7 +114,7 @@ const Explore = () => {
           </div>
         </div>
 
-        {locationLoading && useLocation ? (
+        {isLoading ? (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {[1, 2, 3, 4, 5, 6].map((i) => (
               <div key={i} className="space-y-3">
