@@ -10,14 +10,14 @@ import { colors, radii, spacing } from '../../lib/theme';
 
 export default function ResultScreen() {
   const router = useRouter();
-  const { photoUri, outcome, setCelebration } = useCaptureSession();
+  const { photoUri, photoBase64, outcome, setCelebration } = useCaptureSession();
   const { addSighting } = useLifelist();
 
   const [picked, setPicked] = useState<SpeciesGuess | null>(null);
   const [showAlternates, setShowAlternates] = useState(false);
   const [confirming, setConfirming] = useState(false);
 
-  if (!photoUri || !outcome) {
+  if (!photoUri || !photoBase64 || !outcome) {
     return (
       <SafeAreaView style={styles.safe}>
         <View style={styles.fallback}>
@@ -42,7 +42,7 @@ export default function ResultScreen() {
     if (confirming) return;
     setConfirming(true);
     try {
-      const payload = await addSighting(selected, photoUri!, null);
+      const payload = await addSighting(selected, photoBase64!, null);
       setCelebration(payload);
       router.dismissTo('/');
     } catch {

@@ -4,7 +4,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLifelist } from '../../lib/lifelist-store';
 import { askAma } from '../../lib/ama-service';
-import { AmaMessage } from '../../lib/types';
+import { useAmaThread } from '../../lib/ama-store';
 import { colors, radii, spacing } from '../../lib/theme';
 
 export default function AmaScreen() {
@@ -13,7 +13,7 @@ export default function AmaScreen() {
   const { getEntry } = useLifelist();
   const entry = getEntry(id);
 
-  const [messages, setMessages] = useState<AmaMessage[]>([]);
+  const { messages, append } = useAmaThread(id);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
 
@@ -30,13 +30,13 @@ export default function AmaScreen() {
     if (!question || sending) return;
     if (!entry) return;
 
-    const userMessage: AmaMessage = { id: `${Date.now()}-u`, role: 'user', text: question };
-    setMessages((prev) => [...prev, userMessage]);
+    const history = messages;
     setDraft('');
     setSending(true);
     try {
-      const answer = await askAma(entry, question, messages);
-      setMessages((prev) => [...prev, { id: `${Date.now()}-a`, role: 'assistant', text: answer }]);
+      await append('user', question);
+      const answer = await askAma(entry, question, history);
+      await append('assistant', answer);
     } finally {
       setSending(false);
     }

@@ -1,6 +1,12 @@
-import React, { createContext, useContext, useEffect, useMemo, useState } from 'react';
-import { storage } from './storage';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState } from 'react-native';
+import * as db from './db';
+import { savePhoto } from './photos';
+import { onSynced, sync } from './sync';
+import { migrateLegacyData } from './migrate-legacy';
+import { useAuth } from './auth';
 import { slugify } from './slug';
+import { uuid } from './uuid';
 import { milestoneForCount } from './milestones';
 import { CelebrationPayload, LifelistEntry, Profile, SpeciesGuess } from './types';
 
@@ -17,116 +23,180 @@ function isYesterday(previousKey: string, todayKey: string): boolean {
   return diffDays === 1;
 }
 
+function nextStreakValue(current: number, lastActivityDate: string | null, todayKey: string): number {
+  if (lastActivityDate === todayKey) return current || 1;
+  if (lastActivityDate && isYesterday(lastActivityDate, todayKey)) return current + 1;
+  return 1;
+}
+
 type LifelistState = {
   ready: boolean;
   profile: Profile;
   entries: LifelistEntry[];
   streak: number;
+  lastActivityDate: string | null;
 };
 
-type LifelistContextValue = LifelistState & {
+type LifelistContextValue = Omit<LifelistState, 'lastActivityDate'> & {
   getEntry: (id: string) => LifelistEntry | undefined;
-  addSighting: (guess: SpeciesGuess, photoUri: string, location: string | null) => Promise<CelebrationPayload>;
+  /** Takes the photo's base64 so the sighting keeps a durable local copy. */
+  addSighting: (guess: SpeciesGuess, photoBase64: string, location: string | null) => Promise<CelebrationPayload>;
   updateProfile: (profile: Partial<Profile>) => Promise<void>;
 };
 
 const LifelistContext = createContext<LifelistContextValue | null>(null);
 
 export function LifelistProvider({ children }: { children: React.ReactNode }) {
+  const { ready: authReady, userId } = useAuth();
   const [state, setState] = useState<LifelistState>({
     ready: false,
     profile: DEFAULT_PROFILE,
     entries: [],
     streak: 0,
+    lastActivityDate: null,
   });
 
-  useEffect(() => {
-    (async () => {
-      const [profile, entries, streak] = await Promise.all([
-        storage.readJson<Profile>(storage.keys.profile),
-        storage.readJson<LifelistEntry[]>(storage.keys.entries),
-        storage.readJson<number>(storage.keys.streak),
-      ]);
-      setState({
-        ready: true,
-        profile: profile ?? DEFAULT_PROFILE,
-        entries: entries ?? [],
-        streak: streak ?? 0,
-      });
-    })();
+  // Everything the screens show comes from the local database, so this is the
+  // only thing that stands between launch and a rendered lifelist.
+  const refresh = useCallback(async () => {
+    const [entries, profile] = await Promise.all([db.readLifelist(), db.readProfile()]);
+    setState({
+      ready: true,
+      entries,
+      profile: profile ? { name: profile.name, look: profile.look } : DEFAULT_PROFILE,
+      streak: profile?.streak ?? 0,
+      lastActivityDate: profile?.lastActivityDate ?? null,
+    });
   }, []);
 
-  const value = useMemo<LifelistContextValue>(() => ({
-    ...state,
-    getEntry: (id) => state.entries.find((entry) => entry.id === id),
-    updateProfile: async (partial) => {
-      const nextProfile = { ...state.profile, ...partial };
-      setState((prev) => ({ ...prev, profile: nextProfile }));
-      await storage.writeJson(storage.keys.profile, nextProfile);
-    },
-    addSighting: async (guess, photoUri, location) => {
-      const id = slugify(guess.scientificName || guess.commonName);
-      const now = new Date();
-      const nowIso = now.toISOString();
-      const todayKey = dateKey(now);
+  useEffect(() => {
+    if (!authReady || !userId) return;
+    let cancelled = false;
 
-      const existing = state.entries.find((entry) => entry.id === id);
-      const isNewSpecies = !existing;
+    (async () => {
+      await db.claimForUser(userId);
+      await migrateLegacyData();
 
-      let nextEntries: LifelistEntry[];
-      let entry: LifelistEntry;
-      if (existing) {
-        entry = {
-          ...existing,
-          lastSeenAt: nowIso,
-          sightingCount: existing.sightingCount + 1,
-          location: location ?? existing.location,
-        };
-        nextEntries = state.entries.map((e) => (e.id === id ? entry : e));
-      } else {
-        entry = {
-          id,
+      if (!(await db.readProfile())) {
+        await db.writeProfile({ ...DEFAULT_PROFILE, streak: 0, lastActivityDate: null });
+      }
+
+      if (cancelled) return;
+      await refresh();
+      // Render first, reconcile with the server afterwards.
+      sync(userId);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [authReady, userId, refresh]);
+
+  useEffect(() => onSynced(refresh), [refresh]);
+
+  // Catch up on anything that happened elsewhere while the app was backgrounded.
+  useEffect(() => {
+    if (!userId) return;
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next === 'active') sync(userId);
+    });
+    return () => subscription.remove();
+  }, [userId]);
+
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  const value = useMemo<LifelistContextValue>(() => {
+    const { lastActivityDate: _ignored, ...visible } = state;
+
+    return {
+      ...visible,
+
+      getEntry: (id) => state.entries.find((entry) => entry.id === id),
+
+      updateProfile: async (partial) => {
+        const profile = { ...stateRef.current.profile, ...partial };
+        setState((prev) => ({ ...prev, profile }));
+
+        await db.writeProfile({
+          ...profile,
+          streak: stateRef.current.streak,
+          lastActivityDate: stateRef.current.lastActivityDate,
+        });
+        await db.enqueue('profile.update', {
+          ...profile,
+          streak: stateRef.current.streak,
+          lastActivityDate: stateRef.current.lastActivityDate,
+        });
+
+        if (userId) sync(userId);
+      },
+
+      addSighting: async (guess, photoBase64, location) => {
+        const current = stateRef.current;
+        const speciesSlug = slugify(guess.scientificName || guess.commonName);
+        const sightingId = uuid();
+        const now = new Date();
+        const seenAt = now.toISOString();
+        const todayKey = dateKey(now);
+
+        const isNewSpecies = !current.entries.some((entry) => entry.id === speciesSlug);
+
+        // Write the photo to app storage before anything else so the tile has
+        // something to render even if the upload never succeeds.
+        let photoLocalUri: string | null = null;
+        try {
+          photoLocalUri = savePhoto(sightingId, photoBase64);
+        } catch {
+          photoLocalUri = null;
+        }
+
+        const species = {
+          slug: speciesSlug,
           commonName: guess.commonName,
           scientificName: guess.scientificName,
           description: guess.description,
           categoryId: guess.categoryId,
-          photoUri,
-          firstSeenAt: nowIso,
-          lastSeenAt: nowIso,
-          sightingCount: 1,
-          location,
         };
-        nextEntries = [entry, ...state.entries];
-      }
 
-      const lastActivityDate = await storage.readJson<string>(storage.keys.lastActivityDate);
-      let nextStreak = state.streak;
-      if (lastActivityDate === todayKey) {
-        nextStreak = state.streak || 1;
-      } else if (lastActivityDate && isYesterday(lastActivityDate, todayKey)) {
-        nextStreak = state.streak + 1;
-      } else {
-        nextStreak = 1;
-      }
+        await db.upsertSpecies(species);
+        await db.insertSighting({
+          id: sightingId,
+          speciesSlug,
+          photoLocalUri,
+          photoPath: null,
+          location,
+          seenAt,
+        });
 
-      setState((prev) => ({ ...prev, entries: nextEntries, streak: nextStreak }));
-      await Promise.all([
-        storage.writeJson(storage.keys.entries, nextEntries),
-        storage.writeJson(storage.keys.streak, nextStreak),
-        storage.writeJson(storage.keys.lastActivityDate, todayKey),
-      ]);
+        const streak = nextStreakValue(current.streak, current.lastActivityDate, todayKey);
+        const profileRow = { ...current.profile, streak, lastActivityDate: todayKey };
+        await db.writeProfile(profileRow);
 
-      const milestone = isNewSpecies ? milestoneForCount(nextEntries.length) : null;
+        // Queued in dependency order: the species row must exist on the server
+        // before the sighting that points at it.
+        await db.enqueue('species.upsert', species);
+        await db.enqueue('sighting.insert', { id: sightingId, speciesSlug, location, seenAt });
+        if (photoLocalUri) await db.enqueue('photo.upload', { sightingId });
+        await db.enqueue('profile.update', profileRow);
 
-      return {
-        entry,
-        isNewSpecies,
-        streak: nextStreak,
-        milestone,
-        speciesNumber: nextEntries.length,
-      };
-    },
-  }), [state]);
+        const entries = await db.readLifelist();
+        setState((prev) => ({ ...prev, entries, streak, lastActivityDate: todayKey }));
+
+        if (userId) sync(userId);
+
+        const entry = entries.find((candidate) => candidate.id === speciesSlug) as LifelistEntry;
+
+        return {
+          entry,
+          isNewSpecies,
+          streak,
+          milestone: isNewSpecies ? milestoneForCount(entries.length) : null,
+          speciesNumber: entries.length,
+        };
+      },
+    };
+  }, [state, userId]);
 
   return <LifelistContext.Provider value={value}>{children}</LifelistContext.Provider>;
 }

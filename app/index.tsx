@@ -6,6 +6,7 @@ import { useCaptureSession } from '../lib/capture-session';
 import { CelebrationModal } from '../components/CelebrationModal';
 import { MILESTONES } from '../lib/milestones';
 import { Avatar } from '../components/Avatar';
+import { SyncIndicator } from '../components/SyncIndicator';
 import { colors, radii, spacing } from '../lib/theme';
 import { LifelistEntry } from '../lib/types';
 
@@ -43,6 +44,8 @@ export default function LifelistScreen() {
           </View>
         )}
       </View>
+
+      <SyncIndicator />
 
       <Text style={styles.sectionLabel}>Milestone Badges</Text>
       <View style={styles.badgeRow}>
