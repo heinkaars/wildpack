@@ -1,6 +1,7 @@
 // Type-only: the runtime module is imported lazily in connect() below, because
 // expo-sqlite's web build cannot load during Expo's Node server render.
 import type { SQLiteDatabase } from 'expo-sqlite';
+import { resolvePhotoUri } from './photos';
 import { AmaMessage, LifelistEntry, Profile } from './types';
 
 const DATABASE_NAME = 'wildpack.db';
@@ -105,6 +106,11 @@ export async function setMeta(key: string, value: string): Promise<void> {
   );
 }
 
+export async function deleteMeta(key: string): Promise<void> {
+  const db = await getDb();
+  await db.runAsync('delete from meta where key = ?', key);
+}
+
 /**
  * The local database holds exactly one user's data. If a different account
  * signs in, throw the old copy away rather than blending two lifelists.
@@ -134,8 +140,8 @@ select
   agg.first_seen_at           as firstSeenAt,
   agg.last_seen_at            as lastSeenAt,
   agg.sighting_count          as sightingCount,
+  photo.id                    as photoSightingId,
   photo.photo_local_uri       as photoLocalUri,
-  photo.photo_path            as photoPath,
   loc.location                as location
 from species sp
 join (
@@ -160,19 +166,19 @@ order by agg.last_seen_at desc
 `;
 
 type LifelistRow = Omit<LifelistEntry, 'photoUri'> & {
+  photoSightingId: string | null;
   photoLocalUri: string | null;
-  photoPath: string | null;
 };
 
 export async function readLifelist(): Promise<LifelistEntry[]> {
   const db = await getDb();
   const rows = await db.getAllAsync<LifelistRow>(LIFELIST_QUERY);
 
-  return rows.map(({ photoLocalUri, photoPath, ...entry }) => ({
+  return rows.map(({ photoSightingId, photoLocalUri, ...entry }) => ({
     ...entry,
-    // The on-device copy is what renders; photoPath is the server fallback
-    // used until the sync engine has pulled the file down on a new device.
-    photoUri: photoLocalUri ?? photoPath ?? '',
+    // Only a file that is on this device can be rendered. Anything else is
+    // empty until sync fetches the photo back from the server.
+    photoUri: photoSightingId ? resolvePhotoUri(photoSightingId, photoLocalUri) ?? '' : '',
   }));
 }
 
@@ -247,6 +253,19 @@ export async function insertSighting(sighting: {
     sighting.location,
     sighting.seenAt,
   );
+}
+
+/** Every sighting that claims a photo, for the sync engine's repair pass. */
+export async function readPhotoRecords(): Promise<
+  { id: string; photoLocalUri: string | null; photoPath: string | null }[]
+> {
+  const db = await getDb();
+  const rows = await db.getAllAsync<{ id: string; photo_local_uri: string | null; photo_path: string | null }>(
+    `select id, photo_local_uri, photo_path from sightings
+     where photo_local_uri is not null or photo_path is not null
+     order by seen_at desc`,
+  );
+  return rows.map((row) => ({ id: row.id, photoLocalUri: row.photo_local_uri, photoPath: row.photo_path }));
 }
 
 export async function setSightingPhotoPath(id: string, photoPath: string): Promise<void> {

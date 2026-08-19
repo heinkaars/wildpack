@@ -1,11 +1,13 @@
 import { supabase } from './supabase';
 import * as db from './db';
-import { savePhotoFromUrl, readPhotoBytes } from './photos';
+import { adoptPhoto, hasLocalPhoto, savePhotoFromUrl, readPhotoBytes } from './photos';
 
 const BUCKET = 'sightings';
 const LAST_PULL_KEY = 'last_pulled_at';
 /** Signed photo URLs only need to live long enough for one download. */
 const SIGNED_URL_TTL_SECONDS = 60;
+/** Keeps a big backlog from holding up a sync; the rest follow next time. */
+const MAX_PHOTO_DOWNLOADS_PER_SYNC = 20;
 
 let inFlight: Promise<void> | null = null;
 const listeners = new Set<() => void>();
@@ -230,26 +232,39 @@ async function pull(): Promise<void> {
 }
 
 /**
- * Fetches photos for sightings this device knows about but has never held a
- * copy of — the case after a reinstall or on a second phone.
+ * Puts photos back where the app can see them. A sighting loses its picture
+ * whenever the file it points at is gone — a cleared camera cache, a reinstall,
+ * a second phone — so anything not on disk is copied in or downloaded again.
  */
-async function fetchMissingPhotos(): Promise<void> {
-  const database = await db.getDb();
-  const rows = await database.getAllAsync<{ id: string; photo_path: string }>(
-    'select id, photo_path from sightings where photo_local_uri is null and photo_path is not null limit 20',
-  );
+async function repairPhotos(): Promise<void> {
+  const records = await db.readPhotoRecords();
+  let downloads = 0;
 
-  for (const row of rows) {
+  for (const record of records) {
+    if (hasLocalPhoto(record.id, record.photoLocalUri)) continue;
+
     try {
+      // A file that is still on disk but outside app storage — a capture from
+      // an older build — only needs copying in, no network at all.
+      const adopted = record.photoLocalUri ? adoptPhoto(record.id, record.photoLocalUri) : null;
+      if (adopted) {
+        await db.setSightingLocalUri(record.id, adopted);
+        if (!record.photoPath) await db.enqueue('photo.upload', { sightingId: record.id });
+        continue;
+      }
+
+      if (!record.photoPath || downloads >= MAX_PHOTO_DOWNLOADS_PER_SYNC) continue;
+      downloads += 1;
+
       const { data, error } = await supabase.storage
         .from(BUCKET)
-        .createSignedUrl(row.photo_path, SIGNED_URL_TTL_SECONDS);
+        .createSignedUrl(record.photoPath, SIGNED_URL_TTL_SECONDS);
       if (error || !data) continue;
 
-      const uri = await savePhotoFromUrl(row.id, data.signedUrl);
-      await db.setSightingLocalUri(row.id, uri);
+      const uri = await savePhotoFromUrl(record.id, data.signedUrl);
+      await db.setSightingLocalUri(record.id, uri);
     } catch {
-      // A photo that fails to download is retried on the next sync.
+      // A photo that fails to come back is retried on the next sync.
     }
   }
 }
@@ -267,7 +282,9 @@ export function sync(userId: string): Promise<void> {
     try {
       await flush(userId);
       await pull();
-      await fetchMissingPhotos();
+      await repairPhotos();
+      // A repaired photo may have queued its own upload.
+      await flush(userId);
       notify();
     } catch {
       // Offline or server trouble: local data is untouched and the outbox

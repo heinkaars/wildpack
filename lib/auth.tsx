@@ -9,6 +9,8 @@ type AuthState = {
   userId: string | null;
   /** True for the silent account created on first launch. */
   isAnonymous: boolean;
+  /** True only for the launch that created the account, never after a restore. */
+  justCreated: boolean;
   email: string | null;
   /** Set when we could not create the first account (usually no connection). */
   error: string | null;
@@ -24,12 +26,17 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const MAX_ATTEMPTS = 5;
 
-function stateFromSession(session: Session | null, error: string | null = null): AuthState {
+function stateFromSession(
+  session: Session | null,
+  error: string | null = null,
+  justCreated = false,
+): AuthState {
   return {
     ready: true,
     session,
     userId: session?.user.id ?? null,
     isAnonymous: session?.user.is_anonymous ?? false,
+    justCreated,
     email: session?.user.email ?? null,
     error,
   };
@@ -41,6 +48,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     session: null,
     userId: null,
     isAnonymous: false,
+    justCreated: false,
     email: null,
     error: null,
   });
@@ -66,7 +74,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (cancelled.current) return;
 
         if (!error && signIn.session) {
-          setState(stateFromSession(signIn.session));
+          setState(stateFromSession(signIn.session, null, true));
           return;
         }
 
@@ -88,7 +96,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Keeps state in step with token refreshes and with linkEmail upgrades.
   useEffect(() => {
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      if (session) setState(stateFromSession(session));
+      if (session) setState((prev) => stateFromSession(session, null, prev.justCreated));
     });
     return () => data.subscription.unsubscribe();
   }, []);

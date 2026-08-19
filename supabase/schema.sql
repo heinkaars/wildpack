@@ -10,13 +10,16 @@
 -- bottom of this file, so the app never has to insert it.
 create table if not exists public.profiles (
   id                 uuid primary key references auth.users on delete cascade,
-  name               text not null default 'TrailUser',
+  name               text not null default 'Explorer',
   look               text not null default 'fox',
   streak             integer not null default 0,
   last_activity_date date,
   created_at         timestamptz not null default now(),
   updated_at         timestamptz not null default now()
 );
+
+-- Tables created before the onboarding flow still default to 'TrailUser'.
+alter table public.profiles alter column name set default 'Explorer';
 
 -- Shared catalog of species. Not user-scoped: when one user identifies a Red
 -- Fox, every other user reuses the same row.

@@ -12,17 +12,60 @@ const isWeb = Platform.OS === 'web';
 
 const DATA_URL_PREFIX = 'data:image/jpeg;base64,';
 
+const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+/**
+ * A photo always lives at the same place for a given sighting, so the path is
+ * derived from the id rather than remembered. iOS hands the app a different
+ * container path after some reinstalls and updates, which would leave every
+ * stored absolute URI pointing at nothing.
+ */
 function photoFile(sightingId: string): File {
   const dir = new Directory(Paths.document, FOLDER);
-  dir.create({ intermediates: true, idempotent: true });
+  // Created only when missing: `create` options vary between expo-file-system
+  // builds, and a throw here would cost the sighting its photo.
+  if (!dir.exists) dir.create({ intermediates: true });
   return new File(dir, `${sightingId}.jpg`);
 }
 
+/** True if the URI names a file that is really on disk right now. */
+function fileExists(uri: string): boolean {
+  if (isWeb || !uri.startsWith('file://')) return false;
+  try {
+    return new File(uri).exists;
+  } catch {
+    return false;
+  }
+}
+
 function bytesFromBase64(base64: string): Uint8Array {
-  const binary = atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  return bytes;
+  // atob is quicker where the runtime has it, but not every JS engine the app
+  // runs on does, so fall back to decoding the alphabet by hand.
+  if (typeof atob === 'function') {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    return bytes;
+  }
+
+  const clean = base64.replace(/[^A-Za-z0-9+/]/g, '');
+  const bytes = new Uint8Array((clean.length * 3) >> 2);
+
+  let byte = 0;
+  let buffer = 0;
+  let bits = 0;
+
+  for (let i = 0; i < clean.length; i += 1) {
+    buffer = (buffer << 6) | BASE64_CHARS.indexOf(clean[i]);
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      bytes[byte] = (buffer >> bits) & 0xff;
+      byte += 1;
+    }
+  }
+
+  return bytes.subarray(0, byte);
 }
 
 /**
@@ -33,8 +76,9 @@ export function savePhoto(sightingId: string, base64: string): string {
   if (isWeb) return `${DATA_URL_PREFIX}${base64}`;
 
   const file = photoFile(sightingId);
-  file.create({ intermediates: true, overwrite: true });
-  file.write(base64, { encoding: 'base64' });
+  // Bytes rather than a base64 string with a write option: the option is a
+  // recent addition, and an older native build rejects the extra argument.
+  file.write(bytesFromBase64(base64));
   return file.uri;
 }
 
@@ -43,6 +87,38 @@ export function localPhotoUri(sightingId: string): string | null {
 
   const file = photoFile(sightingId);
   return file.exists ? file.uri : null;
+}
+
+/**
+ * What <Image> should render for a sighting, worked out from what is on disk
+ * now instead of trusting the URI recorded when the photo was taken.
+ */
+export function resolvePhotoUri(sightingId: string, storedUri: string | null): string | null {
+  if (isWeb) return storedUri?.startsWith(DATA_URL_PREFIX) ? storedUri : null;
+
+  const own = localPhotoUri(sightingId);
+  if (own) return own;
+
+  // A photo the app has not taken charge of yet — a capture from an older
+  // build still sitting in the camera's cache.
+  return storedUri && fileExists(storedUri) ? storedUri : null;
+}
+
+/** True while the photo is on this device; false means it has to be recovered. */
+export function hasLocalPhoto(sightingId: string, storedUri: string | null): boolean {
+  return resolvePhotoUri(sightingId, storedUri) !== null;
+}
+
+/**
+ * Copies a photo the app does not own — a camera temp file, say — into app
+ * storage, so it survives the system clearing out caches.
+ */
+export function adoptPhoto(sightingId: string, sourceUri: string): string | null {
+  if (isWeb || !fileExists(sourceUri)) return null;
+
+  const file = photoFile(sightingId);
+  file.write(new File(sourceUri).bytesSync());
+  return file.uri;
 }
 
 /** Pulls a photo down on a device that did not take it. */
@@ -58,7 +134,6 @@ export async function savePhotoFromUrl(sightingId: string, url: string): Promise
   }
 
   const file = photoFile(sightingId);
-  file.create({ intermediates: true, overwrite: true });
   file.write(new Uint8Array(buffer));
   return file.uri;
 }
@@ -73,6 +148,6 @@ export function readPhotoBytes(sightingId: string, localUri: string | null): Uin
     return bytesFromBase64(localUri.slice(DATA_URL_PREFIX.length));
   }
 
-  const file = photoFile(sightingId);
-  return file.exists ? file.bytesSync() : null;
+  const uri = resolvePhotoUri(sightingId, localUri);
+  return uri ? new File(uri).bytesSync() : null;
 }

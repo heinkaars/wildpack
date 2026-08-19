@@ -6,6 +6,7 @@ import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from '../lib/auth';
 import { LifelistProvider } from '../lib/lifelist-store';
 import { CaptureSessionProvider } from '../lib/capture-session';
+import { OnboardingGate, OnboardingProvider } from '../lib/onboarding';
 import { colors } from '../lib/theme';
 
 export default function RootLayout() {
@@ -14,17 +15,26 @@ export default function RootLayout() {
       <SafeAreaProvider>
         <AuthProvider>
           <LifelistProvider>
-            <CaptureSessionProvider>
-              <StatusBar style="dark" />
-              <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
-                <Stack.Screen name="index" />
-                <Stack.Screen name="capture/index" />
-                <Stack.Screen name="capture/identify" />
-                <Stack.Screen name="capture/result" />
-                <Stack.Screen name="species/[id]" options={{ presentation: 'modal' }} />
-                <Stack.Screen name="ama/[id]" options={{ presentation: 'modal' }} />
-              </Stack>
-            </CaptureSessionProvider>
+            <OnboardingProvider>
+              <CaptureSessionProvider>
+                <StatusBar style="dark" />
+                <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: colors.background } }}>
+                  <Stack.Screen name="index" />
+                  <Stack.Screen name="onboarding/welcome" />
+                  <Stack.Screen name="onboarding/look" />
+                  <Stack.Screen name="onboarding/name" />
+                  <Stack.Screen name="onboarding/first-capture" />
+                  <Stack.Screen name="capture/index" />
+                  <Stack.Screen name="capture/identify" />
+                  <Stack.Screen name="capture/result" />
+                  <Stack.Screen name="species/[id]" options={{ presentation: 'modal' }} />
+                  <Stack.Screen name="ama/[id]" options={{ presentation: 'modal' }} />
+                </Stack>
+                {/* Sits above the stack so the lifelist cannot flash before we
+                    know whether this user still owes us onboarding. */}
+                <OnboardingGate />
+              </CaptureSessionProvider>
+            </OnboardingProvider>
           </LifelistProvider>
         </AuthProvider>
       </SafeAreaProvider>

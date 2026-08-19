@@ -1,12 +1,30 @@
 import { useRef, useState } from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import { CameraView, useCameraPermissions } from 'expo-camera';
+import { CameraView, useCameraPermissions, type CameraType } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { useCaptureSession } from '../../lib/capture-session';
 import { colors, radii, spacing } from '../../lib/theme';
+
+// expo-camera's `zoom` is a 0-1 fraction of the device's max zoom, not a
+// scale factor, so a pinch has to be mapped into that range by hand.
+const PINCH_SENSITIVITY = 0.5;
+
+const clamp = (n: number) => Math.min(1, Math.max(0, n));
+
+// Flash and torch are separate props, but they are one decision to the user:
+// "how much light do I want?". One button cycles the whole range.
+type LightMode = 'off' | 'auto' | 'on' | 'torch';
+const LIGHT_CYCLE: LightMode[] = ['off', 'auto', 'on', 'torch'];
+const LIGHT_LABEL: Record<LightMode, string> = {
+  off: 'Off',
+  auto: 'Auto',
+  on: 'On',
+  torch: 'Torch',
+};
 
 export default function CaptureScreen() {
   const router = useRouter();
@@ -14,9 +32,34 @@ export default function CaptureScreen() {
   const cameraRef = useRef<CameraView>(null);
   const [permission, requestPermission] = useCameraPermissions();
   const [taking, setTaking] = useState(false);
+  const [ready, setReady] = useState(false);
+  const [facing, setFacing] = useState<CameraType>('back');
+  const [light, setLight] = useState<LightMode>('off');
+  const [zoom, setZoom] = useState(0);
+  const zoomStart = useRef(0);
+
+  // `.runOnJS(true)` keeps these callbacks on the JS thread: they only set
+  // React state, so there is nothing for a worklet to do here.
+  const pinch = Gesture.Pinch()
+    .runOnJS(true)
+    .onBegin(() => {
+      zoomStart.current = zoom;
+    })
+    .onUpdate((event) => {
+      setZoom(clamp(zoomStart.current + (event.scale - 1) * PINCH_SENSITIVITY));
+    });
+
+  // Animals move. Getting back to a wide shot has to be one gesture, not a
+  // careful reverse pinch.
+  const resetZoom = Gesture.Tap()
+    .numberOfTaps(2)
+    .runOnJS(true)
+    .onEnd(() => setZoom(0));
+
+  const gesture = Gesture.Simultaneous(pinch, resetZoom);
 
   async function handleShoot() {
-    if (!cameraRef.current || taking) return;
+    if (!cameraRef.current || taking || !ready) return;
     setTaking(true);
     try {
       const photo = await cameraRef.current.takePictureAsync({ quality: 0.7, base64: true });
@@ -27,6 +70,17 @@ export default function CaptureScreen() {
     } finally {
       setTaking(false);
     }
+  }
+
+  function handleFlip() {
+    setFacing((current) => (current === 'back' ? 'front' : 'back'));
+    // Zoom range and torch both belong to the lens we are leaving behind.
+    setZoom(0);
+    setLight('off');
+  }
+
+  function handleCycleLight() {
+    setLight((current) => LIGHT_CYCLE[(LIGHT_CYCLE.indexOf(current) + 1) % LIGHT_CYCLE.length]);
   }
 
   async function handleUpload() {
@@ -74,26 +128,81 @@ export default function CaptureScreen() {
 
   return (
     <View style={styles.safe}>
-      <CameraView ref={cameraRef} style={StyleSheet.absoluteFill} facing="back" />
-      <SafeAreaView style={styles.overlay} edges={['top', 'bottom']}>
-        <Pressable
-          style={({ pressed }) => [styles.close, pressed && styles.closePressed]}
-          onPress={() => router.dismissTo('/')}
-          accessibilityRole="button"
-          accessibilityLabel="Close camera"
-        >
-          <Text style={styles.closeIcon}>✕</Text>
-        </Pressable>
+      <GestureDetector gesture={gesture}>
+        <View style={StyleSheet.absoluteFill}>
+          <CameraView
+            ref={cameraRef}
+            style={StyleSheet.absoluteFill}
+            facing={facing}
+            zoom={zoom}
+            flash={light === 'torch' ? 'off' : light}
+            enableTorch={light === 'torch'}
+            onCameraReady={() => setReady(true)}
+          />
+        </View>
+      </GestureDetector>
 
-        <View style={styles.controls}>
+      {/* box-none throughout: the overlay must never swallow the pinch. */}
+      <SafeAreaView style={styles.overlay} edges={['top', 'bottom']} pointerEvents="box-none">
+        <View style={styles.topBar} pointerEvents="box-none">
+          <Pressable
+            style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+            onPress={() => router.dismissTo('/')}
+            accessibilityRole="button"
+            accessibilityLabel="Close camera"
+          >
+            <Text style={styles.iconGlyph}>✕</Text>
+          </Pressable>
+
+          <View style={styles.topRight} pointerEvents="box-none">
+            {/* Front cameras have no torch and no usable flash, so the
+                control would be dead weight there. */}
+            {facing === 'back' && (
+              <Pressable
+                style={({ pressed }) => [
+                  styles.lightButton,
+                  light !== 'off' && styles.lightButtonActive,
+                  pressed && styles.pressed,
+                ]}
+                onPress={handleCycleLight}
+                accessibilityRole="button"
+                accessibilityLabel={`Light: ${LIGHT_LABEL[light]}. Tap to change`}
+              >
+                <Text style={[styles.iconGlyph, light !== 'off' && styles.iconGlyphActive]}>⚡</Text>
+                <Text style={[styles.lightLabel, light !== 'off' && styles.iconGlyphActive]}>
+                  {LIGHT_LABEL[light]}
+                </Text>
+              </Pressable>
+            )}
+
+            <Pressable
+              style={({ pressed }) => [styles.iconButton, pressed && styles.pressed]}
+              onPress={handleFlip}
+              accessibilityRole="button"
+              accessibilityLabel={
+                facing === 'back' ? 'Switch to front camera' : 'Switch to back camera'
+              }
+            >
+              <Text style={styles.iconGlyph}>⇄</Text>
+            </Pressable>
+          </View>
+        </View>
+
+        <View style={styles.controls} pointerEvents="box-none">
+          {zoom > 0 && (
+            <View style={styles.zoomPill} pointerEvents="none">
+              <Text style={styles.zoomText}>Zoom {Math.round(zoom * 100)}%</Text>
+            </View>
+          )}
+
           <Pressable
             style={({ pressed }) => [styles.shutterOuter, pressed && styles.shutterPressed]}
             onPress={handleShoot}
-            disabled={taking}
+            disabled={taking || !ready}
             accessibilityRole="button"
             accessibilityLabel="Take photo"
           >
-            <View style={styles.shutterInner} />
+            <View style={[styles.shutterInner, (taking || !ready) && styles.shutterInnerDisabled]} />
           </Pressable>
 
           <Pressable onPress={handleUpload} style={styles.uploadLink}>
@@ -108,21 +217,51 @@ export default function CaptureScreen() {
 const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#000' },
   permissionSafe: { flex: 1, backgroundColor: colors.background },
-  overlay: { flex: 1, justifyContent: 'space-between' },
+  overlay: { ...StyleSheet.absoluteFillObject, justifyContent: 'space-between' },
 
-  close: {
+  topBar: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+    margin: spacing.md,
+  },
+  topRight: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
+
+  iconButton: {
     width: 40,
     height: 40,
     borderRadius: radii.pill,
-    margin: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
     backgroundColor: 'rgba(0,0,0,0.35)',
   },
-  closePressed: { opacity: 0.7 },
-  closeIcon: { color: colors.surface, fontSize: 18, fontWeight: '600' },
+  pressed: { opacity: 0.7 },
+  iconGlyph: { color: colors.surface, fontSize: 18, fontWeight: '600' },
+  iconGlyphActive: { color: colors.ink },
+
+  lightButton: {
+    height: 40,
+    paddingHorizontal: spacing.md,
+    borderRadius: radii.pill,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    backgroundColor: 'rgba(0,0,0,0.35)',
+  },
+  lightButtonActive: { backgroundColor: colors.amber },
+  lightLabel: { color: colors.surface, fontSize: 14, fontWeight: '600' },
 
   controls: { paddingBottom: spacing.xl, alignItems: 'center' },
+
+  zoomPill: {
+    marginBottom: spacing.md,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radii.pill,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  zoomText: { color: colors.surface, fontSize: 13, fontWeight: '600' },
+
   shutterOuter: {
     width: 84,
     height: 84,
@@ -134,6 +273,7 @@ const styles = StyleSheet.create({
   },
   shutterPressed: { opacity: 0.8 },
   shutterInner: { width: 68, height: 68, borderRadius: 34, backgroundColor: colors.surface },
+  shutterInnerDisabled: { opacity: 0.4 },
 
   uploadLink: { marginTop: spacing.lg, padding: spacing.sm },
   uploadText: {

@@ -9,8 +9,15 @@ import { slugify } from './slug';
 import { uuid } from './uuid';
 import { milestoneForCount } from './milestones';
 import { CelebrationPayload, LifelistEntry, Profile, SpeciesGuess } from './types';
+import { DEFAULT_LOOK } from '../components/Avatar';
 
-const DEFAULT_PROFILE: Profile = { name: 'TrailUser_42', look: 'fox' };
+// A friendly stand-in until the user picks a name on A4. The suffix is drawn
+// once per launch and then persisted with the profile row, so the name a user
+// sees on their lifelist never changes underneath them.
+const DEFAULT_PROFILE: Profile = {
+  name: `Explorer_${Math.floor(10 + Math.random() * 90)}`,
+  look: DEFAULT_LOOK,
+};
 
 function dateKey(date: Date): string {
   return date.toISOString().slice(0, 10);
@@ -47,7 +54,7 @@ type LifelistContextValue = Omit<LifelistState, 'lastActivityDate'> & {
 const LifelistContext = createContext<LifelistContextValue | null>(null);
 
 export function LifelistProvider({ children }: { children: React.ReactNode }) {
-  const { ready: authReady, userId } = useAuth();
+  const { ready: authReady, userId, justCreated } = useAuth();
   const [state, setState] = useState<LifelistState>({
     ready: false,
     profile: DEFAULT_PROFILE,
@@ -78,7 +85,15 @@ export function LifelistProvider({ children }: { children: React.ReactNode }) {
       await migrateLegacyData();
 
       if (!(await db.readProfile())) {
-        await db.writeProfile({ ...DEFAULT_PROFILE, streak: 0, lastActivityDate: null });
+        const starter = { ...DEFAULT_PROFILE, streak: 0, lastActivityDate: null };
+        await db.writeProfile(starter);
+
+        // The server creates its own profile row with a placeholder name, and
+        // the next pull would overwrite ours with it. Claim the row for this
+        // device's generated name — but only for an account created moments
+        // ago, so signing an existing account in on a new device never
+        // overwrites the name that account already chose.
+        if (justCreated) await db.enqueue('profile.update', starter);
       }
 
       if (cancelled) return;
@@ -90,7 +105,7 @@ export function LifelistProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [authReady, userId, refresh]);
+  }, [authReady, userId, justCreated, refresh]);
 
   useEffect(() => onSynced(refresh), [refresh]);
 
@@ -147,7 +162,10 @@ export function LifelistProvider({ children }: { children: React.ReactNode }) {
         let photoLocalUri: string | null = null;
         try {
           photoLocalUri = savePhoto(sightingId, photoBase64);
-        } catch {
+        } catch (error) {
+          // The sighting is still worth keeping without its photo, but a
+          // silent failure here is what an empty lifelist tile looks like.
+          console.warn('Could not save the captured photo', error);
           photoLocalUri = null;
         }
 

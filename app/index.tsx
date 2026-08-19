@@ -7,6 +7,7 @@ import { CelebrationModal } from '../components/CelebrationModal';
 import { MILESTONES } from '../lib/milestones';
 import { Avatar } from '../components/Avatar';
 import { SyncIndicator } from '../components/SyncIndicator';
+import { useOnboarding } from '../lib/onboarding';
 import { colors, radii, spacing } from '../lib/theme';
 import { LifelistEntry } from '../lib/types';
 
@@ -14,6 +15,7 @@ export default function LifelistScreen() {
   const router = useRouter();
   const { ready, profile, entries, streak } = useLifelist();
   const { celebration, reset } = useCaptureSession();
+  const { resetOnboarding } = useOnboarding();
 
   function handleCelebrationContinue() {
     if (!celebration) return;
@@ -46,6 +48,12 @@ export default function LifelistScreen() {
       </View>
 
       <SyncIndicator />
+
+      {__DEV__ && (
+        <Pressable onPress={resetOnboarding} hitSlop={8}>
+          <Text style={styles.devReplay}>↺ Replay onboarding (dev)</Text>
+        </Pressable>
+      )}
 
       <Text style={styles.sectionLabel}>Milestone Badges</Text>
       <View style={styles.badgeRow}>
@@ -127,6 +135,13 @@ const styles = StyleSheet.create({
   },
   streakText: { color: colors.surface, fontSize: 13, fontWeight: '700' },
   streakFlame: { fontSize: 13, marginLeft: 4 },
+
+  devReplay: {
+    marginTop: spacing.sm,
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.danger,
+  },
 
   sectionLabel: {
     marginTop: spacing.lg,
