@@ -4,6 +4,7 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useCaptureSession } from '../../lib/capture-session';
 import { useLifelist } from '../../lib/lifelist-store';
+import { LOW_CONFIDENCE_THRESHOLD } from '../../lib/identify-service';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { SpeciesGuess } from '../../lib/types';
 import { colors, radii, spacing } from '../../lib/theme';
@@ -22,6 +23,24 @@ export default function ResultScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.fallback}>
           <Text style={styles.fallbackText}>That capture didn't come through.</Text>
+          <PrimaryButton
+            label="Try again"
+            onPress={() => router.replace('/capture')}
+            style={{ marginTop: spacing.lg }}
+          />
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  if (outcome.best.confidence < LOW_CONFIDENCE_THRESHOLD) {
+    return (
+      <SafeAreaView style={styles.safe}>
+        <View style={styles.fallback}>
+          <Image source={{ uri: photoUri }} style={styles.unidentifiedThumb} />
+          <Text style={styles.fallbackText}>
+            We couldn't quite make this one out — nature can be sneaky. Try again?
+          </Text>
           <PrimaryButton
             label="Try again"
             onPress={() => router.replace('/capture')}
@@ -115,6 +134,13 @@ const styles = StyleSheet.create({
   safe: { flex: 1, backgroundColor: colors.background },
   fallback: { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: spacing.lg },
   fallbackText: { color: colors.inkMuted, textAlign: 'center' },
+  unidentifiedThumb: {
+    width: 120,
+    height: 120,
+    borderRadius: radii.md,
+    marginBottom: spacing.lg,
+    backgroundColor: colors.border,
+  },
   scroll: { paddingBottom: spacing.lg },
   photo: { width: '100%', aspectRatio: 1, backgroundColor: colors.border },
   body: { padding: spacing.lg },
