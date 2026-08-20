@@ -8,6 +8,7 @@ import { MILESTONES } from '../lib/milestones';
 import { Avatar } from '../components/Avatar';
 import { SyncIndicator } from '../components/SyncIndicator';
 import { useOnboarding } from '../lib/onboarding';
+import { FlashBanner } from '../lib/flash';
 import { colors, radii, spacing } from '../lib/theme';
 import { LifelistEntry } from '../lib/types';
 
@@ -37,7 +38,14 @@ export default function LifelistScreen() {
   const header = (
     <View>
       <View style={styles.headerRow}>
-        <Avatar look={profile.look} size={44} />
+        <Pressable
+          onPress={() => router.push('/account')}
+          hitSlop={8}
+          accessibilityRole="button"
+          accessibilityLabel="Your account"
+        >
+          <Avatar look={profile.look} size={44} />
+        </Pressable>
         <Text style={styles.name} numberOfLines={1}>{profile.name}</Text>
         {streak > 0 && (
           <View style={styles.streakPill}>
@@ -114,6 +122,9 @@ export default function LifelistScreen() {
       {celebration && (
         <CelebrationModal payload={celebration} onContinue={handleCelebrationContinue} />
       )}
+
+      {/* Confirms a sign-in or a new account, both of which land here. */}
+      <FlashBanner />
     </SafeAreaView>
   );
 }

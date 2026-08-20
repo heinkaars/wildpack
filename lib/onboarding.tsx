@@ -1,15 +1,15 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import { StyleSheet, Text, View } from 'react-native';
 import { useRouter, useSegments } from 'expo-router';
-import { deleteMeta, getMeta, setMeta } from './db';
 import { useLifelist } from './lifelist-store';
+import {
+  clearOnboardingFlags,
+  isOnboardingComplete,
+  isOnboardingSnoozed,
+  markOnboardingComplete as writeComplete,
+  snoozeOnboarding,
+} from './onboarding-flags';
 import { colors } from './theme';
-
-/** Set once the user reaches A5, i.e. after look and name are chosen. */
-const COMPLETE_KEY = 'onboarding_complete';
-/** ISO timestamp: "Skip for now" buys this much peace, then A1 comes back. */
-const SNOOZE_KEY = 'onboarding_snoozed_until';
-const SNOOZE_MS = 24 * 60 * 60 * 1000;
 
 type OnboardingContextValue = {
   /** False until the flags have been read, so nothing renders too early. */
@@ -37,14 +37,13 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
     let cancelled = false;
 
     (async () => {
-      const [complete, snoozedUntil] = await Promise.all([
-        getMeta(COMPLETE_KEY),
-        getMeta(SNOOZE_KEY),
+      const [complete, snoozed] = await Promise.all([
+        isOnboardingComplete(),
+        isOnboardingSnoozed(),
       ]);
       if (cancelled) return;
 
-      const snoozed = snoozedUntil !== null && Date.now() < Date.parse(snoozedUntil);
-      setNeedsOnboarding(complete !== '1' && !snoozed);
+      setNeedsOnboarding(!complete && !snoozed);
       setReady(true);
     })();
 
@@ -55,16 +54,16 @@ export function OnboardingProvider({ children }: { children: React.ReactNode }) 
 
   const skipForNow = useCallback(async () => {
     setNeedsOnboarding(false);
-    await setMeta(SNOOZE_KEY, new Date(Date.now() + SNOOZE_MS).toISOString());
+    await snoozeOnboarding();
   }, []);
 
   const markComplete = useCallback(async () => {
     setNeedsOnboarding(false);
-    await setMeta(COMPLETE_KEY, '1');
+    await writeComplete();
   }, []);
 
   const resetOnboarding = useCallback(async () => {
-    await Promise.all([deleteMeta(COMPLETE_KEY), deleteMeta(SNOOZE_KEY)]);
+    await clearOnboardingFlags();
     setNeedsOnboarding(true);
   }, []);
 

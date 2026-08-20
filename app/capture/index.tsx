@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { CameraView, useCameraPermissions, type CameraType } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
@@ -7,6 +7,7 @@ import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PrimaryButton } from '../../components/PrimaryButton';
 import { useCaptureSession } from '../../lib/capture-session';
+import { normalizeWebImage } from '../../lib/photos';
 import { colors, radii, spacing } from '../../lib/theme';
 
 // expo-camera's `zoom` is a 0-1 fraction of the device's max zoom, not a
@@ -37,6 +38,7 @@ export default function CaptureScreen() {
   const [light, setLight] = useState<LightMode>('off');
   const [zoom, setZoom] = useState(0);
   const zoomStart = useRef(0);
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   // `.runOnJS(true)` keeps these callbacks on the JS thread: they only set
   // React state, so there is nothing for a worklet to do here.
@@ -84,16 +86,32 @@ export default function CaptureScreen() {
   }
 
   async function handleUpload() {
+    setUploadError(null);
+
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       quality: 0.7,
       base64: true,
     });
     const asset = result.assets?.[0];
-    if (!result.canceled && asset?.base64) {
-      setPhoto(asset.uri, asset.base64);
-      router.push('/capture/identify');
+    if (result.canceled || !asset?.base64) return;
+
+    // The web picker hands back whatever bytes the file has, unconverted —
+    // including formats like HEIC that OpenAI's vision API rejects. The
+    // native picker always re-encodes to JPEG, so only web needs this.
+    if (Platform.OS === 'web') {
+      try {
+        const normalized = await normalizeWebImage(asset.uri);
+        setPhoto(normalized.uri, normalized.base64);
+        router.push('/capture/identify');
+      } catch {
+        setUploadError("That photo format isn't supported here. Try a different photo, or take one with the camera.");
+      }
+      return;
     }
+
+    setPhoto(asset.uri, asset.base64);
+    router.push('/capture/identify');
   }
 
   if (!permission) {
@@ -115,6 +133,7 @@ export default function CaptureScreen() {
             onPress={handleUpload}
             style={{ marginTop: spacing.sm }}
           />
+          {uploadError && <Text style={styles.uploadErrorText}>{uploadError}</Text>}
           <PrimaryButton
             label="Cancel"
             variant="ghost"
@@ -195,6 +214,12 @@ export default function CaptureScreen() {
             </View>
           )}
 
+          {uploadError && (
+            <View style={styles.uploadErrorPill} pointerEvents="none">
+              <Text style={styles.uploadErrorPillText}>{uploadError}</Text>
+            </View>
+          )}
+
           <Pressable
             style={({ pressed }) => [styles.shutterOuter, pressed && styles.shutterPressed]}
             onPress={handleShoot}
@@ -262,6 +287,16 @@ const styles = StyleSheet.create({
   },
   zoomText: { color: colors.surface, fontSize: 13, fontWeight: '600' },
 
+  uploadErrorPill: {
+    marginBottom: spacing.md,
+    marginHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radii.md,
+    backgroundColor: 'rgba(0,0,0,0.65)',
+  },
+  uploadErrorPillText: { color: colors.surface, fontSize: 13, fontWeight: '600', textAlign: 'center' },
+
   shutterOuter: {
     width: 84,
     height: 84,
@@ -286,4 +321,11 @@ const styles = StyleSheet.create({
   permissionBox: { flex: 1, justifyContent: 'center', paddingHorizontal: spacing.xl },
   permissionTitle: { fontSize: 20, fontWeight: '700', color: colors.ink, textAlign: 'center' },
   permissionBody: { color: colors.inkMuted, textAlign: 'center', marginTop: spacing.sm },
+  uploadErrorText: {
+    color: colors.danger,
+    fontSize: 13,
+    fontWeight: '600',
+    textAlign: 'center',
+    marginTop: spacing.sm,
+  },
 });

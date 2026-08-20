@@ -415,3 +415,94 @@ export async function outboxStatus(): Promise<{ pending: number; stuck: number; 
     lastError: row?.last_error ?? null,
   };
 }
+
+// --- account switching ------------------------------------------------------
+
+/**
+ * Everything one account holds locally, in the shape the write helpers take.
+ * Read before signing a different account in, so an anonymous user's sightings
+ * can be re-queued against the account they sign into instead of being dropped.
+ */
+export type LocalSnapshot = {
+  species: {
+    slug: string;
+    commonName: string;
+    scientificName: string;
+    description: string;
+    categoryId: string;
+  }[];
+  sightings: {
+    id: string;
+    speciesSlug: string;
+    photoLocalUri: string | null;
+    photoPath: string | null;
+    location: string | null;
+    seenAt: string;
+  }[];
+  amaMessages: {
+    id: string;
+    speciesSlug: string;
+    role: 'user' | 'assistant';
+    body: string;
+    createdAt: string;
+  }[];
+};
+
+export async function exportLocalData(): Promise<LocalSnapshot> {
+  const db = await getDb();
+
+  const [species, sightings, amaMessages] = await Promise.all([
+    db.getAllAsync<{
+      slug: string;
+      common_name: string;
+      scientific_name: string;
+      description: string;
+      category_id: string;
+    }>('select slug, common_name, scientific_name, description, category_id from species'),
+
+    db.getAllAsync<{
+      id: string;
+      species_slug: string;
+      photo_local_uri: string | null;
+      photo_path: string | null;
+      location: string | null;
+      seen_at: string;
+    }>(
+      `select id, species_slug, photo_local_uri, photo_path, location, seen_at
+       from sightings order by seen_at asc`,
+    ),
+
+    db.getAllAsync<{
+      id: string;
+      species_slug: string;
+      role: 'user' | 'assistant';
+      body: string;
+      created_at: string;
+    }>('select id, species_slug, role, body, created_at from ama_messages order by created_at asc'),
+  ]);
+
+  return {
+    species: species.map((row) => ({
+      slug: row.slug,
+      commonName: row.common_name,
+      scientificName: row.scientific_name,
+      description: row.description,
+      categoryId: row.category_id,
+    })),
+    sightings: sightings.map((row) => ({
+      id: row.id,
+      speciesSlug: row.species_slug,
+      photoLocalUri: row.photo_local_uri,
+      photoPath: row.photo_path,
+      location: row.location,
+      seenAt: row.seen_at,
+    })),
+    amaMessages: amaMessages.map((row) => ({
+      id: row.id,
+      speciesSlug: row.species_slug,
+      role: row.role,
+      body: row.body,
+      createdAt: row.created_at,
+    })),
+  };
+}

@@ -8,6 +8,8 @@ const LAST_PULL_KEY = 'last_pulled_at';
 const SIGNED_URL_TTL_SECONDS = 60;
 /** Keeps a big backlog from holding up a sync; the rest follow next time. */
 const MAX_PHOTO_DOWNLOADS_PER_SYNC = 20;
+/** Photos come back several at a time; one after another is painfully slow. */
+const PHOTO_DOWNLOAD_CONCURRENCY = 4;
 
 let inFlight: Promise<void> | null = null;
 const listeners = new Set<() => void>();
@@ -238,7 +240,7 @@ async function pull(): Promise<void> {
  */
 async function repairPhotos(): Promise<void> {
   const records = await db.readPhotoRecords();
-  let downloads = 0;
+  const toDownload: typeof records = [];
 
   for (const record of records) {
     if (hasLocalPhoto(record.id, record.photoLocalUri)) continue;
@@ -253,20 +255,42 @@ async function repairPhotos(): Promise<void> {
         continue;
       }
 
-      if (!record.photoPath || downloads >= MAX_PHOTO_DOWNLOADS_PER_SYNC) continue;
-      downloads += 1;
-
-      const { data, error } = await supabase.storage
-        .from(BUCKET)
-        .createSignedUrl(record.photoPath, SIGNED_URL_TTL_SECONDS);
-      if (error || !data) continue;
-
-      const uri = await savePhotoFromUrl(record.id, data.signedUrl);
-      await db.setSightingLocalUri(record.id, uri);
+      if (record.photoPath) toDownload.push(record);
     } catch {
-      // A photo that fails to come back is retried on the next sync.
+      // A photo that cannot be adopted is retried on the next sync.
     }
   }
+
+  const queue = toDownload.slice(0, MAX_PHOTO_DOWNLOADS_PER_SYNC);
+  let next = 0;
+
+  // Several at a time, and each tile is announced the moment its own photo
+  // lands, so the lifelist fills in rather than staying blank until the last
+  // download finishes.
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const record = queue[next];
+      next += 1;
+      if (!record) return;
+
+      try {
+        const { data, error } = await supabase.storage
+          .from(BUCKET)
+          .createSignedUrl(record.photoPath as string, SIGNED_URL_TTL_SECONDS);
+        if (error || !data) continue;
+
+        const uri = await savePhotoFromUrl(record.id, data.signedUrl);
+        await db.setSightingLocalUri(record.id, uri);
+        notify();
+      } catch {
+        // A photo that fails to come back is retried on the next sync.
+      }
+    }
+  };
+
+  await Promise.all(
+    Array.from({ length: Math.min(PHOTO_DOWNLOAD_CONCURRENCY, queue.length) }, worker),
+  );
 }
 
 // --- entry point ------------------------------------------------------------
@@ -282,6 +306,13 @@ export function sync(userId: string): Promise<void> {
     try {
       await flush(userId);
       await pull();
+
+      // The lifelist, the name and the streak are all in the local database by
+      // now, so show them. Waiting until the photos have been fetched too left
+      // a signed-in user staring at an empty list for as long as the slowest
+      // download took.
+      notify();
+
       await repairPhotos();
       // A repaired photo may have queued its own upload.
       await flush(userId);

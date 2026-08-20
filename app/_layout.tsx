@@ -24,6 +24,11 @@ export default function RootLayout() {
                   <Stack.Screen name="onboarding/look" />
                   <Stack.Screen name="onboarding/name" />
                   <Stack.Screen name="onboarding/first-capture" />
+                  <Stack.Screen name="account" options={{ presentation: 'modal' }} />
+                  <Stack.Screen name="auth/sign-in" />
+                  <Stack.Screen name="auth/create-account" />
+                  <Stack.Screen name="auth/forgot-password" />
+                  <Stack.Screen name="auth/verify" />
                   <Stack.Screen name="capture/index" />
                   <Stack.Screen name="capture/identify" />
                   <Stack.Screen name="capture/result" />

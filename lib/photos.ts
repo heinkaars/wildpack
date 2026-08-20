@@ -139,6 +139,39 @@ export async function savePhotoFromUrl(sightingId: string, url: string): Promise
 }
 
 /**
+ * expo-image-picker's web implementation hands back whatever bytes the
+ * chosen file has, unconverted — including formats like HEIC, which OpenAI's
+ * vision API rejects outright. The native picker always re-encodes to JPEG,
+ * so only the web path needs this: decode into a canvas and re-export as a
+ * real JPEG, which also fixes anything else the browser can decode but the
+ * app assumes is already JPEG (PNG-with-alpha, WEBP, GIF).
+ *
+ * Throws if the browser cannot decode the file at all (e.g. HEIC in Chrome,
+ * which has no built-in HEIC decoder).
+ */
+export async function normalizeWebImage(uri: string): Promise<{ uri: string; base64: string }> {
+  const img = new Image();
+  img.decoding = 'async';
+
+  await new Promise<void>((resolve, reject) => {
+    img.onload = () => resolve();
+    img.onerror = () => reject(new Error('Could not decode this image in the browser'));
+    img.src = uri;
+  });
+
+  const canvas = document.createElement('canvas');
+  canvas.width = img.naturalWidth;
+  canvas.height = img.naturalHeight;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) throw new Error('Canvas 2D context unavailable');
+  ctx.drawImage(img, 0, 0);
+
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  const base64 = dataUrl.slice(DATA_URL_PREFIX.length);
+  return { uri: dataUrl, base64 };
+}
+
+/**
  * Bytes for upload, or null if the local copy has gone missing. On web the
  * bytes live in the stored data URL rather than on disk.
  */
