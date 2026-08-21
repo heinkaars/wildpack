@@ -4,6 +4,8 @@
 - **Version:** 54.0.37 — read docs at https://docs.expo.dev/versions/v54.0.0/
 - **Dev server:** `npm start --port 8090` (port is required; passed in `.claude/launch.json`)
 - **Full restart needed:** when adding new `+api.ts` files — hot reload doesn't pick them up
+- **Android permissions:** Configured in `app.json` for camera, audio recording, and audio settings
+- **EAS setup:** Project ID and owner configured in `app.json` for Expo Application Services builds
 
 ## Web SSR Traps
 `app.json` has `"web": {"output": "server"}` for API routes. This pre-renders in Node and crashes the dev server if module-level code touches browser/native globals:

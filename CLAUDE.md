@@ -15,7 +15,7 @@
 
 **AI Backend:** OpenAI (`gpt-4o-mini`) temporarily stands in for iNaturalist. Swap point is server-side only (`app/api/identify+api.ts`, `app/api/ama+api.ts`). Client code sees no change if response shapes stay the same.
 
-**Web SSR:** Project uses `"web": {"output": "server"}` for API routes. Module-level code touching `window` or browser globals crashes the dev server. Guard AsyncStorage with `typeof window === 'undefined'`. Lazy-import `expo-sqlite`.
+**Web SSR:** Project uses `"web": {"output": "server"}` for API routes. Module-level code touching `window` or browser globals crashes the dev server. Guard AsyncStorage with `typeof window === 'undefined'`. `expo-sqlite` is lazy-imported inside `connect()` using `require()` to avoid module-level loading errors in Node.
 
 **Photo Capture:** Request `base64: true` directly from camera/picker, not file path afterward — `expo-file-system` File class is unreliable on real devices.
 

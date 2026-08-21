@@ -68,7 +68,7 @@ create table if not exists meta (
 let dbPromise: Promise<SQLiteDatabase> | null = null;
 
 async function connect(): Promise<SQLiteDatabase> {
-  const SQLite = await import('expo-sqlite');
+  const SQLite: typeof import('expo-sqlite') = require('expo-sqlite');
   const db = await SQLite.openDatabaseAsync(DATABASE_NAME);
   await db.execAsync('pragma journal_mode = WAL;');
   await db.execAsync(SCHEMA);
