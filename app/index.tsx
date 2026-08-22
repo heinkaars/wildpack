@@ -63,7 +63,7 @@ export default function LifelistScreen() {
         </Pressable>
       )}
 
-      <Text style={styles.sectionLabel}>Milestone Badges</Text>
+      <Text style={styles.sectionLabel}>BADGES</Text>
       <View style={styles.badgeRow}>
         {MILESTONES.map((milestone) => {
           const earned = entries.length >= milestone.threshold;
