@@ -16,6 +16,9 @@ export default function AmaScreen() {
   const { messages, append } = useAmaThread(id);
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
+  // A refused question used to fail silently: the message appeared, no answer
+  // ever came, and nothing said why. Now the reason is shown under the thread.
+  const [error, setError] = useState<string | null>(null);
 
   if (!entry) {
     return (
@@ -33,10 +36,14 @@ export default function AmaScreen() {
     const history = messages;
     setDraft('');
     setSending(true);
+    setError(null);
     try {
       await append('user', question);
       const answer = await askAma(entry, question, history);
       await append('assistant', answer);
+    } catch (e) {
+      // The question stays in the thread, so asking again is one tap away.
+      setError(e instanceof Error ? e.message : 'Could not get an answer right now.');
     } finally {
       setSending(false);
     }
@@ -66,6 +73,12 @@ export default function AmaScreen() {
       />
 
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        {error ? (
+          <View style={styles.errorBox} accessibilityLiveRegion="polite">
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        ) : null}
+
         <View style={styles.inputRow}>
           <TextInput
             value={draft}
@@ -106,6 +119,17 @@ const styles = StyleSheet.create({
   bubbleAssistant: { backgroundColor: colors.surface, alignSelf: 'flex-start', borderWidth: 1, borderColor: colors.border },
   bubbleTextUser: { color: colors.surface },
   bubbleTextAssistant: { color: colors.ink },
+  // Same treatment as the auth screens, so a refusal looks the same everywhere.
+  errorBox: {
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radii.md,
+    backgroundColor: '#FBE9E7',
+    borderWidth: 1,
+    borderColor: colors.danger,
+  },
+  errorText: { color: colors.danger, fontSize: 13, fontWeight: '600' },
   inputRow: {
     flexDirection: 'row',
     padding: spacing.md,

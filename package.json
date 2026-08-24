@@ -3,7 +3,6 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.117.1",
     "@expo/metro-runtime": "~6.1.2",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@supabase/supabase-js": "^2.112.3",
@@ -39,10 +38,10 @@
     "typescript": "~5.9.2"
   },
   "scripts": {
-    "start": "expo start --tunnel --port 8090",
-    "start:lan": "expo start --port 8090",
-    "android": "expo start --tunnel --android --port 8090",
-    "ios": "expo start --tunnel --ios --port 8090",
+    "start": "expo start --port 8090",
+    "start:tunnel": "expo start --tunnel --port 8090",
+    "android": "expo start --android --port 8090",
+    "ios": "expo start --ios --port 8090",
     "web": "expo start --web --port 8090"
   },
   "private": true

@@ -69,7 +69,10 @@ function friendlyMessage(raw: string): string {
   if (message.includes('network') || message.includes('fetch')) {
     return 'Could not reach WildPack. Check your connection.';
   }
-  return raw;
+  // Anything unrecognised is developer-facing wording that can name internals.
+  // It belongs in the log, not in the red box on the sign-in screen.
+  console.warn('[auth]', raw);
+  return 'Something went wrong. Please try again.';
 }
 
 function fail(raw: string): never {

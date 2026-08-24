@@ -42,6 +42,20 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * Postgres codes that will never come good, however long the backoff waits:
+ * a policy that refuses this write, or a row pointing at something absent.
+ */
+const PERMANENT_CODES = new Set(['42501', '23503']);
+
+/** A job that retrying cannot fix. It is dropped rather than left in the way. */
+class PermanentError extends Error {}
+
+function rethrow(error: { message: string; code?: string }): never {
+  if (error.code && PERMANENT_CODES.has(error.code)) throw new PermanentError(error.message);
+  throw new Error(error.message);
+}
+
 // --- push -------------------------------------------------------------------
 
 async function runJob(job: db.OutboxJob, userId: string): Promise<void> {
@@ -49,7 +63,11 @@ async function runJob(job: db.OutboxJob, userId: string): Promise<void> {
 
   switch (job.kind) {
     case 'species.upsert': {
-      // Another user may have added this species already; that is fine.
+      // The shared catalog is written server-side now, in app/api/identify.
+      // This job stays as the safety net for a database that has not had the
+      // new policies applied yet: there it still works, and on a migrated one
+      // it is refused and quietly dropped. Another user may have added the
+      // species already; that is fine either way.
       const { error } = await supabase.from('species').upsert(
         {
           slug: payload.slug,
@@ -60,7 +78,7 @@ async function runJob(job: db.OutboxJob, userId: string): Promise<void> {
         },
         { onConflict: 'slug', ignoreDuplicates: true },
       );
-      if (error) throw new Error(error.message);
+      if (error) rethrow(error);
       return;
     }
 
@@ -75,7 +93,7 @@ async function runJob(job: db.OutboxJob, userId: string): Promise<void> {
         },
         { onConflict: 'id' },
       );
-      if (error) throw new Error(error.message);
+      if (error) rethrow(error);
       return;
     }
 
@@ -93,13 +111,13 @@ async function runJob(job: db.OutboxJob, userId: string): Promise<void> {
       const { error: uploadError } = await supabase.storage
         .from(BUCKET)
         .upload(path, bytes, { contentType: 'image/jpeg', upsert: true });
-      if (uploadError) throw new Error(uploadError.message);
+      if (uploadError) rethrow(uploadError);
 
       const { error: linkError } = await supabase
         .from('sightings')
         .update({ photo_path: path })
         .eq('id', payload.sightingId);
-      if (linkError) throw new Error(linkError.message);
+      if (linkError) rethrow(linkError);
 
       await db.setSightingPhotoPath(payload.sightingId, path);
       return;
@@ -115,7 +133,7 @@ async function runJob(job: db.OutboxJob, userId: string): Promise<void> {
           last_activity_date: payload.lastActivityDate ?? null,
         })
         .eq('id', userId);
-      if (error) throw new Error(error.message);
+      if (error) rethrow(error);
       return;
     }
 
@@ -131,7 +149,7 @@ async function runJob(job: db.OutboxJob, userId: string): Promise<void> {
         },
         { onConflict: 'id' },
       );
-      if (error) throw new Error(error.message);
+      if (error) rethrow(error);
       return;
     }
   }
@@ -156,6 +174,18 @@ async function flush(userId: string): Promise<void> {
         await runJob(job, userId);
         await db.completeJob(job.id);
       } catch (error) {
+        if (error instanceof PermanentError) {
+          // Waiting cannot help this one, and leaving it queued would hold
+          // every later write behind it forever — `flush` stops at the first
+          // failure on purpose, so one stuck job would stop all syncing.
+          if (job.kind !== 'species.upsert') {
+            // A refused species write is expected once the catalog moved
+            // server-side; anything else being refused is worth knowing about.
+            console.warn(`Dropping ${job.kind}: ${errorMessage(error)}`);
+          }
+          await db.completeJob(job.id);
+          continue;
+        }
         await db.failJob(job.id, job.attempts, errorMessage(error));
         return;
       }

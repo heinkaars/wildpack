@@ -24,6 +24,14 @@ const FAILURES: Record<IdentifyErrorKind | 'missing' | 'unknown', Failure> = {
     title: "Couldn't identify that",
     body: 'Something went wrong on our end. Your photo is still here, so you can try again.',
   },
+  auth: {
+    title: 'We could not confirm your account',
+    body: 'Close WildPack and open it again to refresh your session. Your photo is safe and will still be here.',
+  },
+  rate: {
+    title: 'That is a lot of photos at once',
+    body: 'Give it a minute to catch up, then try again. Your photo is safe and ready to go.',
+  },
   unknown: {
     title: "Couldn't identify that",
     body: 'Something unexpected went wrong. Your photo is still here, so you can try again.',
