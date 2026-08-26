@@ -175,6 +175,74 @@ create policy "delete own photos" on storage.objects for delete to authenticated
   using (bucket_id = 'sightings' and (storage.foldername(name))[1] = auth.uid()::text);
 
 -- ---------------------------------------------------------------------------
+-- Rate limiting: counting and claiming a budget in one locked step.
+-- ---------------------------------------------------------------------------
+
+-- The server used to count, decide and record in three separate round trips,
+-- which is not a ceiling. Requests arriving together all read the same
+-- under-budget count before any of them had recorded itself, so a caller who
+-- simply did not wait between requests took as many as they liked. All three
+-- steps happen here now, inside one transaction, under one lock per bucket.
+--
+-- Deliberately NOT security definer. The service role bypasses row level
+-- security on its own, which is all this needs; a definer function would hand
+-- that same power to anybody who could reach it. Execute is revoked from the
+-- client roles below, so the server is the only caller left.
+create or replace function public.claim_api_budget(
+  p_buckets        text[],
+  p_maxes          integer[],
+  p_window_seconds integer
+)
+returns boolean
+language plpgsql
+set search_path = ''
+as $$
+declare
+  since      timestamptz := now() - make_interval(secs => p_window_seconds);
+  bucket_key text;
+  used       integer;
+  i          integer;
+begin
+  if p_buckets is null
+     or array_length(p_buckets, 1) is null
+     or array_length(p_buckets, 1) <> array_length(p_maxes, 1) then
+    raise exception 'claim_api_budget: p_buckets and p_maxes must be the same non-empty length';
+  end if;
+
+  -- One lock per bucket, taken in a fixed order so two callers who share a
+  -- bucket queue up behind each other instead of deadlocking. Advisory locks
+  -- are released at the end of this transaction, which is the end of this call.
+  for bucket_key in select t.b from unnest(p_buckets) as t(b) order by t.b loop
+    perform pg_advisory_xact_lock(hashtext(bucket_key));
+  end loop;
+
+  for i in 1 .. array_length(p_buckets, 1) loop
+    select count(*) into used
+      from public.api_usage u
+     where u.bucket = p_buckets[i]
+       and u.created_at > since;
+
+    -- Over on any one bucket refuses the whole call and records nothing, so a
+    -- caller already past the line stops growing the table.
+    if used >= p_maxes[i] then
+      return false;
+    end if;
+  end loop;
+
+  insert into public.api_usage (bucket)
+  select unnest(p_buckets);
+
+  return true;
+end;
+$$;
+
+-- Supabase's default privileges grant execute on new functions to the client
+-- roles too, so the grant has to be taken back rather than merely not given.
+revoke all on function public.claim_api_budget(text[], integer[], integer) from public;
+revoke all on function public.claim_api_budget(text[], integer[], integer) from anon, authenticated;
+grant execute on function public.claim_api_budget(text[], integer[], integer) to service_role;
+
+-- ---------------------------------------------------------------------------
 -- Triggers
 -- ---------------------------------------------------------------------------
 

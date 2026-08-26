@@ -96,10 +96,60 @@ export function rateLimited(key: string, max: number): boolean {
   return recent.length > max;
 }
 
-/** Best-effort caller address, for a ceiling a fresh account cannot reset. */
+/**
+ * How many proxies sit in front of this app: a single host like Vercel or
+ * Netlify is 1, that host behind Cloudflare as well is 2. Left unset there is
+ * no address worth trusting, so the per-address ceiling is skipped rather than
+ * fed a value the caller picked for themselves.
+ */
+const TRUSTED_PROXY_HOPS = Number(process.env.TRUSTED_PROXY_HOPS ?? 0);
+
+/** The longest a real address can be: an IPv4-mapped IPv6 one. */
+const MAX_IP_CHARS = 45;
+
+let warnedAboutForwarding = false;
+
+/**
+ * The address a proxy we actually run behind observed, or null.
+ *
+ * Proxies APPEND to x-forwarded-for — each one adds the address it received
+ * the request from, on the right — so the chain reads
+ * `<whatever the caller sent>, <real caller>, <proxy>, …`. Reading the leftmost
+ * entry therefore reads a string the caller typed, and a caller who changes it
+ * on every request draws a fresh budget on every request. Counting in from the
+ * RIGHT by the number of proxies we genuinely run behind lands on the entry the
+ * outermost one wrote, which the caller cannot forge.
+ *
+ * The length cap matters as much as the position. A bucket key is written to
+ * the database, and a header is whatever length its sender chose.
+ */
 function callerIp(request: Request): string | null {
-  const forwarded = request.headers.get('x-forwarded-for');
-  return forwarded?.split(',')[0]?.trim() || null;
+  const header = request.headers.get('x-forwarded-for');
+
+  if (TRUSTED_PROXY_HOPS < 1) {
+    // Said once rather than every request: silently having no ceiling is how
+    // this gets missed, but a line per call would bury the log.
+    if (header && !warnedAboutForwarding) {
+      warnedAboutForwarding = true;
+      console.warn(
+        '[rate-limit] x-forwarded-for is present but TRUSTED_PROXY_HOPS is unset, so the ' +
+          'per-address ceiling is off. Set it to the number of proxies in front of this app ' +
+          '(usually 1) to turn it on.',
+      );
+    }
+    return null;
+  }
+
+  const chain =
+    header
+      ?.split(',')
+      .map((entry) => entry.trim())
+      .filter(Boolean) ?? [];
+
+  // A chain shorter than the hops we expect means the request did not arrive
+  // the way we think it did; no address is better than the wrong one.
+  const ip = chain[chain.length - TRUSTED_PROXY_HOPS];
+  return ip && ip.length <= MAX_IP_CHARS ? ip : null;
 }
 
 type Bucket = { bucket: string; max: number };
@@ -127,43 +177,34 @@ function sweep(store: SupabaseClient): void {
  * instance.
  *
  * Falls back to the in-process counter — never to no limit at all — when the
- * table cannot be reached. An outage should cost accuracy, not the whole
+ * database cannot be reached. An outage should cost accuracy, not the whole
  * ceiling: unlimited access to a paid endpoint is the one outcome to avoid.
  */
 async function anyOverBudget(buckets: Bucket[]): Promise<boolean> {
   const store = usageStore();
   if (!store) return buckets.some((entry) => rateLimited(entry.bucket, entry.max));
 
-  const since = new Date(Date.now() - WINDOW_MS).toISOString();
-
   try {
-    // Counted before the call is recorded, so a caller who is already over the
-    // line stops causing writes. Recording first would let anyone hammering the
-    // endpoint keep growing a table they are no longer allowed to use.
-    const { data, error } = await store
-      .from('api_usage')
-      .select('bucket')
-      .in('bucket', buckets.map((entry) => entry.bucket))
-      .gt('created_at', since);
+    // Counting, deciding and recording happen inside one locked transaction in
+    // the database rather than across three round trips from here. Split apart,
+    // requests arriving together all read the same under-budget count before
+    // any of them had recorded itself, and all of them passed — which is not a
+    // ceiling. See claim_api_budget in supabase/schema.sql.
+    const { data, error } = await store.rpc('claim_api_budget', {
+      p_buckets: buckets.map((entry) => entry.bucket),
+      p_maxes: buckets.map((entry) => entry.max),
+      p_window_seconds: WINDOW_MS / 1000,
+    });
     if (error) throw new Error(error.message);
 
-    const counts = new Map<string, number>();
-    for (const row of data ?? []) {
-      counts.set(row.bucket, (counts.get(row.bucket) ?? 0) + 1);
-    }
-
-    if (buckets.some((entry) => (counts.get(entry.bucket) ?? 0) >= entry.max)) return true;
-
-    const { error: writeError } = await store
-      .from('api_usage')
-      .insert(buckets.map((entry) => ({ bucket: entry.bucket })));
-    if (writeError) throw new Error(writeError.message);
-
     sweep(store);
-    return false;
+    // The function records the calls it allows and records nothing when it
+    // refuses, so a caller already past the line stops growing the table.
+    return data !== true;
   } catch (error) {
     console.error(
-      '[rate-limit] durable store unavailable, falling back to this process only',
+      '[rate-limit] durable store unavailable, falling back to this process only. If this ' +
+        'is every request, claim_api_budget is probably missing — run supabase/schema.sql.',
       error,
     );
     return buckets.some((entry) => rateLimited(entry.bucket, entry.max));
@@ -181,6 +222,10 @@ type Refused = { userId?: undefined; response: Response };
  * loop; the per-address one is what an attacker hits, since signing up for a
  * fresh anonymous account is free and would otherwise hand them a clean
  * allowance every time.
+ *
+ * The per-address ceiling only engages where TRUSTED_PROXY_HOPS says how far
+ * into x-forwarded-for the real address is — see callerIp. Without it there is
+ * no address a caller cannot forge, and a forgeable ceiling is not one.
  */
 export async function guard(
   request: Request,
